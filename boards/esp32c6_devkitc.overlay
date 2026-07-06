@@ -1,0 +1,5 @@
+/* ESP32-C6 的 wifi 外设默认 disabled,启用它才会编入乐鑫 WiFi 驱动
+ * (参照 zephyr/samples/net/wifi/shell/socs/esp32c6.overlay) */
+&wifi {
+	status = "okay";
+};
