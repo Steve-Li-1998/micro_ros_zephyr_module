@@ -1,0 +1,4 @@
+/* 同 esp32c6_devkitc.overlay:wifi 外设默认 disabled,启用才会编入乐鑫 WiFi 驱动 */
+&wifi {
+	status = "okay";
+};
