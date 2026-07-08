@@ -7,8 +7,10 @@ else
 	BUILD_TYPE = Release
 endif
 
-CFLAGS_INTERNAL := $(X_CFLAGS)
-CXXFLAGS_INTERNAL := $(X_CXXFLAGS)
+# LVGL 注入的 -DLV_CONF_PATH="…" 带引号,会撞坏下方 configure_toolchain 里
+# sed 模板的 shell 引号配对;micro-ROS 库用不到 LVGL,按词剔除
+CFLAGS_INTERNAL := $(filter-out -DLV_CONF_PATH=%,$(X_CFLAGS))
+CXXFLAGS_INTERNAL := $(filter-out -DLV_CONF_PATH=%,$(X_CXXFLAGS))
 
 CFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CFLAGS_INTERNAL)
 CXXFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CXXFLAGS_INTERNAL)
