@@ -27,6 +27,8 @@
 #include <posix/poll.h>
 #endif
 
+#include <rmw_microros/rmw_microros.h>
+
 #ifdef __cplusplus
 extern "C"
 {
@@ -45,6 +47,18 @@ bool zephyr_transport_open(struct uxrCustomTransport * transport);
 bool zephyr_transport_close(struct uxrCustomTransport * transport);
 size_t zephyr_transport_write(struct uxrCustomTransport* transport, const uint8_t * buf, size_t len, uint8_t * err);
 size_t zephyr_transport_read(struct uxrCustomTransport* transport, uint8_t* buf, size_t len, int timeout, uint8_t* err);
+
+/* 把本 transport 注册为 micro-ROS 自定义传输,参数取 Kconfig 生成的 default_params */
+static inline void microros_transports_init(void)
+{
+    rmw_uros_set_custom_transport(
+        MICRO_ROS_FRAMING_REQUIRED,
+        (void *) &default_params,
+        zephyr_transport_open,
+        zephyr_transport_close,
+        zephyr_transport_write,
+        zephyr_transport_read);
+}
 
 #ifdef __cplusplus
 }

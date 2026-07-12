@@ -89,9 +89,19 @@ zephyr_library_named(microros_transports)
 zephyr_include_directories(${MICROROS_DIR}/include)
 zephyr_include_directories(${MICROROS_TRANSPORT_DIR})
 
+# microros_transports.h 里的 microros_transports_init() 依赖 rmw_microros 头,
+# 编译本库时同样需要各 package 的 include 子目录
+foreach(pkg ${INCLUDE_ROS2_PACKAGES})
+    zephyr_library_include_directories(${MICROROS_DIR}/include/${pkg})
+endforeach()
+
 zephyr_library_sources(
    ${MICROROS_TRANSPORT_DIR}/microros_transports.c
 )
+
+if(CONFIG_MICROROS_TRANSPORT_UDP AND CONFIG_WIFI)
+    zephyr_library_sources(${MICROROS_TRANSPORT_DIR}/microros_wifi.c)
+endif()
 
 add_dependencies(microros microros_transports)
 add_dependencies(microros_transports libmicroros_project)
