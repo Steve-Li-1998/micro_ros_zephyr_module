@@ -99,10 +99,6 @@ zephyr_library_sources(
    ${MICROROS_TRANSPORT_DIR}/microros_transports.c
 )
 
-if(CONFIG_MICROROS_TRANSPORT_UDP AND CONFIG_WIFI)
-    zephyr_library_sources(${MICROROS_TRANSPORT_DIR}/microros_wifi.c)
-endif()
-
 add_dependencies(microros microros_transports)
 add_dependencies(microros_transports libmicroros_project)
 

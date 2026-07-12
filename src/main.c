@@ -24,8 +24,8 @@
 #include <rmw_microros/rmw_microros.h>
 #include <microros_transports.h>
 
-#if defined(CONFIG_MICROROS_TRANSPORT_UDP)
-#include <microros_wifi.h>
+#if defined(CONFIG_WIFI_BOOTSTRAP)
+#include <wifi_bootstrap.h>
 #endif
 
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){printf("Failed status on line %d: %d. Aborting.\n",__LINE__,(int)temp_rc);for(;;){};}}
@@ -45,8 +45,8 @@ void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
 
 int main(void)
 {
-#if defined(CONFIG_MICROROS_TRANSPORT_UDP)
-	microros_wifi_connect();
+#if defined(CONFIG_WIFI_BOOTSTRAP)
+	wifi_bootstrap_connect();
 #endif
 
 	microros_transports_init();
