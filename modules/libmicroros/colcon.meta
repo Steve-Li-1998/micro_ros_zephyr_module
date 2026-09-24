@@ -35,6 +35,8 @@
                 "-DRMW_UXRCE_MAX_HISTORY=4",
                 "-DRMW_UXRCE_MAX_SERVICES=0",
                 "-DRMW_UXRCE_MAX_CLIENTS=0",
+                "-DRMW_UXRCE_ENTITY_CREATION_DESTROY_TIMEOUT=10000",
+                "-DRMW_UXRCE_PUBLISH_RELIABLE_TIMEOUT=3000",
                 "-DRMW_UXRCE_TRANSPORT=custom_serial"
             ]
         },
