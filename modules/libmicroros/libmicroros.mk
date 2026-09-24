@@ -1,6 +1,19 @@
 UROS_DIR = $(COMPONENT_PATH)/micro_ros_src
 DEBUG ?= 0
 
+ifeq ($(COMPONENT_PATH),)
+$(error COMPONENT_PATH 未设置)
+endif
+
+# 构建产物全部落在 BUILD_PATH(调用方 app 构建目录下的 libmicroros/,见 CMakeLists.txt),
+# 模块目录只放各 app 共用的下载源码(micro_ros_src/src)和主机侧 ament 工具(micro_ros_dev)。
+# 只有 get_package_names / distclean 不碰产物,可以不传
+ifneq ($(filter-out get_package_names distclean,$(or $(MAKECMDGOALS),all)),)
+ifeq ($(BUILD_PATH),)
+$(error BUILD_PATH 未设置:构建产物须落在调用方 app 的构建目录)
+endif
+endif
+
 ifeq ($(DEBUG), 1)
 	BUILD_TYPE = Debug
 else
@@ -15,24 +28,29 @@ CXXFLAGS_INTERNAL := $(filter-out -DLV_CONF_PATH=%,$(X_CXXFLAGS))
 CFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CFLAGS_INTERNAL)
 CXXFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CXXFLAGS_INTERNAL)
 
-all: $(COMPONENT_PATH)/libmicroros.a
+.PHONY: all clean distclean get_package_names configure_colcon_meta configure_toolchain colcon_build
 
+all: $(BUILD_PATH)/libmicroros.a
+
+# 只清本 app 的产物;各 app 共用的下载源码由 distclean 清
 clean:
-	rm -rf $(COMPONENT_PATH)/libmicroros.a; \
-	rm -rf $(COMPONENT_PATH)/include; \
-	rm -rf $(COMPONENT_PATH)/zephyr_toolchain.cmake; \
-	rm -rf $(COMPONENT_PATH)/micro_ros_dev; \
-	rm -rf $(COMPONENT_PATH)/micro_ros_src;
+	rm -rf $(BUILD_PATH)/libmicroros.a $(BUILD_PATH)/include \
+		$(BUILD_PATH)/zephyr_toolchain.cmake $(BUILD_PATH)/configured_colcon.meta \
+		$(BUILD_PATH)/build $(BUILD_PATH)/install $(BUILD_PATH)/log
+
+distclean:
+	rm -rf $(COMPONENT_PATH)/micro_ros_dev $(UROS_DIR)
 
 ZEPHYR_CONF_FILE := $(PROJECT_BINARY_DIR)/.config
 
-get_package_names: $(COMPONENT_PATH)/micro_ros_src/src
-	@cd $(COMPONENT_PATH)/micro_ros_src/src; \
+get_package_names: $(UROS_DIR)/src
+	@cd $(UROS_DIR)/src; \
 	colcon list | awk '{print $$1}' | awk -v d=";" '{s=(NR==1?s:s d)$$0}END{print s}'
 
-configure_colcon_meta: $(COMPONENT_PATH)/colcon.meta $(COMPONENT_PATH)/micro_ros_src/src
+configure_colcon_meta: $(COMPONENT_PATH)/colcon.meta $(UROS_DIR)/src
 	. $(COMPONENT_PATH)/utils.sh; \
-	cp $(COMPONENT_PATH)/colcon.meta $(COMPONENT_PATH)/configured_colcon.meta; \
+	META_FILE=$(BUILD_PATH)/configured_colcon.meta; \
+	cp $(COMPONENT_PATH)/colcon.meta $$META_FILE; \
 	ZEPHYR_CONF_FILE=$(ZEPHYR_CONF_FILE); \
 	update_meta_from_zephyr_config "CONFIG_MICROROS_NODES" "rmw_microxrcedds" "RMW_UXRCE_MAX_NODES"; \
 	update_meta_from_zephyr_config "CONFIG_MICROROS_PUBLISHERS" "rmw_microxrcedds" "RMW_UXRCE_MAX_PUBLISHERS"; \
@@ -50,19 +68,28 @@ configure_colcon_meta: $(COMPONENT_PATH)/colcon.meta $(COMPONENT_PATH)/micro_ros
 	update_meta "rmw_microxrcedds" "RMW_UXRCE_TRANSPORT=custom";
 
 
+# sysroot 指向 BUILD_PATH:模板里 find_library/find_path 是 ONLY 模式,只在 sysroot
+# 内查找,colcon 的 install 目录必须在它下面。
+# 编译器或 flags 变了就清空 colcon 构建:模板用的 CMAKE_C_FLAGS_INIT 只在各包首次
+# configure 时进缓存,增量构建会一直沿用旧 flags(换架构则直接链接失败)
 configure_toolchain: $(COMPONENT_PATH)/zephyr_toolchain.cmake.in
-	rm -f $(COMPONENT_PATH)/zephyr_toolchain.cmake; \
 	cat $(COMPONENT_PATH)/zephyr_toolchain.cmake.in | \
 		sed "s/@CMAKE_C_COMPILER@/$(subst /,\/,$(X_CC))/g" | \
 		sed "s/@CMAKE_CXX_COMPILER@/$(subst /,\/,$(X_CXX))/g" | \
-		sed "s/@CMAKE_SYSROOT@/$(subst /,\/,$(COMPONENT_PATH))/g" | \
+		sed "s/@CMAKE_SYSROOT@/$(subst /,\/,$(BUILD_PATH))/g" | \
 		sed "s/@CFLAGS@/$(subst /,\/,$(CFLAGS_INTERNAL))/g" | \
 		sed "s/@CXXFLAGS@/$(subst /,\/,$(CXXFLAGS_INTERNAL))/g" \
-		> $(COMPONENT_PATH)/zephyr_toolchain.cmake
+		> $(BUILD_PATH)/zephyr_toolchain.cmake.new; \
+	if cmp -s $(BUILD_PATH)/zephyr_toolchain.cmake.new $(BUILD_PATH)/zephyr_toolchain.cmake; then \
+		rm $(BUILD_PATH)/zephyr_toolchain.cmake.new; \
+	else \
+		mv $(BUILD_PATH)/zephyr_toolchain.cmake.new $(BUILD_PATH)/zephyr_toolchain.cmake; \
+		rm -rf $(BUILD_PATH)/build $(BUILD_PATH)/install; \
+	fi
 
 $(COMPONENT_PATH)/micro_ros_dev/install:
-	rm -rf micro_ros_dev; \
-	mkdir micro_ros_dev; cd micro_ros_dev; \
+	rm -rf $(COMPONENT_PATH)/micro_ros_dev; \
+	mkdir $(COMPONENT_PATH)/micro_ros_dev; cd $(COMPONENT_PATH)/micro_ros_dev; \
 	git clone -b jazzy https://github.com/ament/ament_cmake src/ament_cmake; \
 	git clone -b jazzy https://github.com/ament/ament_lint src/ament_lint; \
 	git clone -b jazzy https://github.com/ament/ament_package src/ament_package; \
@@ -72,9 +99,9 @@ $(COMPONENT_PATH)/micro_ros_dev/install:
 	touch src/ament_cmake_ros/rmw_test_fixture/COLCON_IGNORE; \
 	colcon build --cmake-args -DBUILD_TESTING=OFF;
 
-$(COMPONENT_PATH)/micro_ros_src/src:
-	@rm -rf micro_ros_src; \
-	mkdir micro_ros_src; cd micro_ros_src; \
+$(UROS_DIR)/src:
+	@rm -rf $(UROS_DIR); \
+	mkdir $(UROS_DIR); cd $(UROS_DIR); \
 	git clone -b ros2 https://github.com/eProsima/micro-CDR src/micro-CDR; \
 	git clone -b ros2 https://github.com/eProsima/Micro-XRCE-DDS-Client src/Micro-XRCE-DDS-Client; \
 	git clone -b jazzy https://github.com/micro-ROS/rcl src/rcl; \
@@ -107,13 +134,15 @@ $(COMPONENT_PATH)/micro_ros_src/src:
     touch src/rcl_logging/rcl_logging_spdlog/COLCON_IGNORE; \
     touch src/rcl_interfaces/test_msgs/COLCON_IGNORE;
 
-$(COMPONENT_PATH)/micro_ros_src/install: configure_colcon_meta configure_toolchain $(COMPONENT_PATH)/micro_ros_dev/install $(COMPONENT_PATH)/micro_ros_src/src
-	cd $(UROS_DIR); \
-	. ../micro_ros_dev/install/local_setup.sh; \
+# 源码经 --base-paths 引用,build/install/log 落在 cwd 即 BUILD_PATH
+colcon_build: configure_colcon_meta configure_toolchain $(COMPONENT_PATH)/micro_ros_dev/install $(UROS_DIR)/src
+	cd $(BUILD_PATH); \
+	. $(COMPONENT_PATH)/micro_ros_dev/install/local_setup.sh; \
 	colcon build \
+		--base-paths $(UROS_DIR)/src \
 		--merge-install \
 		--packages-ignore-regex=.*_cpp \
-		--metas $(COMPONENT_PATH)/configured_colcon.meta \
+		--metas $(BUILD_PATH)/configured_colcon.meta \
 		--cmake-args \
 		"--no-warn-unused-cli" \
 		-DCMAKE_POSITION_INDEPENDENT_CODE:BOOL=OFF \
@@ -121,12 +150,14 @@ $(COMPONENT_PATH)/micro_ros_src/install: configure_colcon_meta configure_toolcha
 		-DBUILD_SHARED_LIBS=OFF \
 		-DBUILD_TESTING=OFF \
 		-DCMAKE_BUILD_TYPE=$(BUILD_TYPE) \
-		-DCMAKE_TOOLCHAIN_FILE=$(COMPONENT_PATH)/zephyr_toolchain.cmake \
-		-DCMAKE_VERBOSE_MAKEFILE=OFF; \
+		-DCMAKE_TOOLCHAIN_FILE=$(BUILD_PATH)/zephyr_toolchain.cmake \
+		-DCMAKE_VERBOSE_MAKEFILE=OFF;
 
-$(COMPONENT_PATH)/libmicroros.a: $(COMPONENT_PATH)/micro_ros_src/install
-	mkdir -p $(UROS_DIR)/libmicroros; cd $(UROS_DIR)/libmicroros; \
-	for file in $$(find $(UROS_DIR)/install/lib/ -name '*.a'); do \
+# 依赖伪目标 colcon_build,每次都重打包。原先依赖 install 目录的 mtime,colcon 原地
+# 覆写 .a 不会更新目录 mtime,会静默沿用旧库
+$(BUILD_PATH)/libmicroros.a: colcon_build
+	mkdir -p $(BUILD_PATH)/repack; cd $(BUILD_PATH)/repack; \
+	for file in $$(find $(BUILD_PATH)/install/lib/ -name '*.a'); do \
 		folder=$$(echo $$file | sed -E "s/(.+)\/(.+).a/\2/"); \
 		mkdir -p $$folder; cd $$folder; $(X_AR) x $$file; \
 		for f in *; do \
@@ -134,6 +165,7 @@ $(COMPONENT_PATH)/libmicroros.a: $(COMPONENT_PATH)/micro_ros_src/install
 		done; \
 		cd ..; rm -rf $$folder; \
 	done ; \
-	$(X_AR) rc libmicroros.a *.obj; cp libmicroros.a $(COMPONENT_PATH); ${X_RANLIB} $(COMPONENT_PATH)/libmicroros.a; \
-	cd ..; rm -rf libmicroros; \
-	cp -R $(UROS_DIR)/install/include $(COMPONENT_PATH)/include;
+	$(X_AR) rc libmicroros.a *.obj; cp libmicroros.a $(BUILD_PATH); ${X_RANLIB} $(BUILD_PATH)/libmicroros.a; \
+	cd ..; rm -rf repack; \
+	rm -rf $(BUILD_PATH)/include; \
+	cp -R $(BUILD_PATH)/install/include $(BUILD_PATH)/include;
