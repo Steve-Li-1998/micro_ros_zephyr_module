@@ -1,0 +1,41 @@
+From ce46bb9d6d80aeb68f1a829660d6c49616a2c4a3 Mon Sep 17 00:00:00 2001
+From: Hao <hao3.li@tu-dortmund.de>
+Date: Wed, 4 Nov 2026 16:12:37 +0000
+Subject: [PATCH] Ignore out-of-range ACKNACKs in the output reliable stream
+
+UDP can reorder ACKNACKs. A stale one made buffers_to_clean underflow to
+65535, so uxr_process_acknack reset every history slot, including a slot
+that was written but not sent yet. That sample was never sent, while
+rcl_publish returned OK.
+
+Ignore an ACKNACK older than the last one processed, or one that
+acknowledges a position beyond last_sent. The second case is defensive
+and has not been observed.
+
+Refs eProsima/Micro-XRCE-DDS-Client#423
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/c/core/session/stream/output_reliable_stream.c | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/src/c/core/session/stream/output_reliable_stream.c b/src/c/core/session/stream/output_reliable_stream.c
+index 93ca6e2..e7cde36 100644
+--- a/src/c/core/session/stream/output_reliable_stream.c
++++ b/src/c/core/session/stream/output_reliable_stream.c
+@@ -262,6 +262,15 @@ void uxr_process_acknack(
+         uxrSeqNum first_unacked_seq_num)
+ {
+     uxrSeqNum last_acked_seq_num = uxr_seq_num_sub(first_unacked_seq_num, 1);
++
++    // A valid ACKNACK acknowledges a position in [last_acknown, last_sent]. ACKNACKs can be
++    // reordered, and a stale one would underflow and clean the whole history.
++    if (0 > uxr_seq_num_cmp(last_acked_seq_num, stream->last_acknown) ||
++            0 < uxr_seq_num_cmp(last_acked_seq_num, stream->last_sent))
++    {
++        return;
++    }
++
+     size_t buffers_to_clean = uxr_seq_num_sub(last_acked_seq_num, stream->last_acknown);
+     for (size_t i = 0; i < buffers_to_clean; i++)
+     {

@@ -37,6 +37,7 @@ endif
 
 # Downloaded sources with local patches stay on the commit their patches were tested on.
 RMW_MICROXRCEDDS_REF = e64d79f98423c4be77ac24bcb3f14be13144fe6e
+XRCE_CLIENT_REF = 83f129a80770a09aac9e823896ecbf6a0eddf0fc
 
 .PHONY: all clean distclean get_package_names patch_sources configure_colcon_meta configure_toolchain colcon_build
 
@@ -149,6 +150,7 @@ $(UROS_DIR)/src:
 
 patch_sources: $(UROS_DIR)/src
 	sh $(COMPONENT_PATH)/apply_patches.sh $(UROS_DIR)/src/rmw-microxrcedds $(RMW_MICROXRCEDDS_REF) $(COMPONENT_PATH)/patches/rmw-microxrcedds
+	sh $(COMPONENT_PATH)/apply_patches.sh $(UROS_DIR)/src/Micro-XRCE-DDS-Client $(XRCE_CLIENT_REF) $(COMPONENT_PATH)/patches/Micro-XRCE-DDS-Client
 
 # 源码经 --base-paths 引用,build/install/log 落在 cwd 即 BUILD_PATH
 colcon_build: configure_colcon_meta configure_toolchain $(COMPONENT_PATH)/micro_ros_dev/install $(UROS_DIR)/src patch_sources
