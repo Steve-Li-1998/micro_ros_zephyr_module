@@ -35,7 +35,10 @@ CFLAGS_INTERNAL += -include zephyr/kernel.h
 CXXFLAGS_INTERNAL += -include zephyr/kernel.h
 endif
 
-.PHONY: all clean distclean get_package_names configure_colcon_meta configure_toolchain colcon_build
+# Downloaded sources with local patches stay on the commit their patches were tested on.
+RMW_MICROXRCEDDS_REF = e64d79f98423c4be77ac24bcb3f14be13144fe6e
+
+.PHONY: all clean distclean get_package_names patch_sources configure_colcon_meta configure_toolchain colcon_build
 
 all: $(BUILD_PATH)/libmicroros.a
 
@@ -144,8 +147,11 @@ $(UROS_DIR)/src:
     touch src/rcl_logging/rcl_logging_spdlog/COLCON_IGNORE; \
     touch src/rcl_interfaces/test_msgs/COLCON_IGNORE;
 
+patch_sources: $(UROS_DIR)/src
+	sh $(COMPONENT_PATH)/apply_patches.sh $(UROS_DIR)/src/rmw-microxrcedds $(RMW_MICROXRCEDDS_REF) $(COMPONENT_PATH)/patches/rmw-microxrcedds
+
 # 源码经 --base-paths 引用,build/install/log 落在 cwd 即 BUILD_PATH
-colcon_build: configure_colcon_meta configure_toolchain $(COMPONENT_PATH)/micro_ros_dev/install $(UROS_DIR)/src
+colcon_build: configure_colcon_meta configure_toolchain $(COMPONENT_PATH)/micro_ros_dev/install $(UROS_DIR)/src patch_sources
 	cd $(BUILD_PATH); \
 	. $(COMPONENT_PATH)/micro_ros_dev/install/local_setup.sh; \
 	colcon build \

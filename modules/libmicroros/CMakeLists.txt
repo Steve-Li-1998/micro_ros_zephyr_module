@@ -71,6 +71,13 @@ file(CONFIGURE OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/microros_kconfig.txt
 ExternalProject_Add_StepDependencies(libmicroros_project build
     ${CMAKE_CURRENT_BINARY_DIR}/microros_kconfig.txt)
 
+# The stamp also has to notice new patches, and pinned commits, which libmicroros.mk holds
+file(GLOB microros_patches CONFIGURE_DEPENDS ${MICROROS_DIR}/patches/*/*.patch)
+ExternalProject_Add_StepDependencies(libmicroros_project build
+    ${microros_patches}
+    ${MICROROS_DIR}/apply_patches.sh
+    ${MICROROS_DIR}/libmicroros.mk)
+
 zephyr_link_libraries(${MICROROS_BUILD_DIR}/libmicroros.a)
 
 zephyr_interface_library_named(microros)

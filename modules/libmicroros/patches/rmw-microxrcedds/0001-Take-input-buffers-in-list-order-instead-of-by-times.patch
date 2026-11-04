@@ -1,0 +1,60 @@
+From 031fd51eb02b0f21097fdcac1b683d2ba19c3edd Mon Sep 17 00:00:00 2001
+From: Hao <hao3.li@tu-dortmund.de>
+Date: Tue, 3 Nov 2026 23:52:36 +0000
+Subject: [PATCH] Take input buffers in list order instead of by timestamp
+
+Samples that arrive within one clock tick get equal timestamps, and the
+strict comparison then returned the newest one. rcl_take swapped such
+samples, and KEEP_LAST could overwrite a newer sample than the oldest.
+
+Allocated items are inserted newest first, so the oldest buffer of an
+entity is its last match. Overwriting used to keep the buffer in place
+and break that order, so recycle it through the pool to move it to the
+head. timestamp remains for the lifespan check.
+
+Refs micro-ROS/rmw_microxrcedds#349
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ rmw_microxrcedds_c/src/types.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/rmw_microxrcedds_c/src/types.c b/rmw_microxrcedds_c/src/types.c
+index ff0f0ca..30c63f4 100644
+--- a/rmw_microxrcedds_c/src/types.c
++++ b/rmw_microxrcedds_c/src/types.c
+@@ -252,6 +252,11 @@ rmw_uxrce_mempool_item_t * rmw_uxrce_get_static_input_buffer_for_entity(
+         ret = get_memory(&static_buffer_memory);
+       } else {
+         ret = rmw_uxrce_find_static_input_buffer_by_owner(entity);
++        if (ret != NULL) {
++          // Recycle through the pool, so that the new sample moves to the list head
++          put_memory(&static_buffer_memory, ret);
++          ret = get_memory(&static_buffer_memory);
++        }
+       }
+       break;
+     case RMW_QOS_POLICY_HISTORY_KEEP_ALL:
+@@ -273,19 +278,18 @@ rmw_uxrce_mempool_item_t * rmw_uxrce_find_static_input_buffer_by_owner(
+   void * owner)
+ {
+   rmw_uxrce_mempool_item_t * ret = NULL;
+-  int64_t min_time = INT64_MAX;
+ 
+   UXR_LOCK(&static_buffer_memory.mutex);
+ 
+-  // Return the oldest
++  // Return the oldest: allocated items are kept newest first, so it is the last match.
++  // Timestamps cannot order samples, as several can arrive within one clock tick.
+   rmw_uxrce_mempool_item_t * static_buffer_item = static_buffer_memory.allocateditems;
+   while (static_buffer_item != NULL) {
+     rmw_uxrce_static_input_buffer_t * data =
+       (rmw_uxrce_static_input_buffer_t *)static_buffer_item->data;
+ 
+-    if (data->owner == owner && data->timestamp < min_time) {
++    if (data->owner == owner) {
+       ret = static_buffer_item;
+-      min_time = data->timestamp;
+     }
+ 
+     static_buffer_item = static_buffer_item->next;
