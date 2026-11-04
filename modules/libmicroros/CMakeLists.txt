@@ -62,7 +62,7 @@ externalproject_add(libmicroros_project
 # 命令行,不显式挂依赖就会静默沿用旧库。只挂 libmicroros.mk 的 configure_colcon_meta
 # 写进 colcon meta 的这几项(与之一一对应),agent IP 等其它 Kconfig 改动不必重编
 set(microros_kconfig "")
-foreach(opt NODES PUBLISHERS SUBSCRIBERS CLIENTS SERVERS RMW_HISTORIC XRCE_DDS_HISTORIC XRCE_DDS_MTU)
+foreach(opt NODES PUBLISHERS SUBSCRIBERS CLIENTS SERVERS RMW_HISTORIC XRCE_DDS_HISTORIC XRCE_DDS_MTU MULTITHREAD)
     string(APPEND microros_kconfig "CONFIG_MICROROS_${opt}=${CONFIG_MICROROS_${opt}}\n")
 endforeach()
 # 内容不变时不重写文件,mtime 不动就不触发重编
@@ -117,6 +117,11 @@ endforeach()
 zephyr_library_sources(
    ${MICROROS_TRANSPORT_DIR}/microros_transports.c
 )
+
+# Same forced include as libmicroros.mk: multithread.h needs struct k_mutex
+if(CONFIG_MICROROS_MULTITHREAD)
+    zephyr_library_compile_options(-include zephyr/kernel.h)
+endif()
 
 add_dependencies(microros microros_transports)
 add_dependencies(microros_transports libmicroros_project)

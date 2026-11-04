@@ -28,6 +28,13 @@ CXXFLAGS_INTERNAL := $(filter-out -DLV_CONF_PATH=%,$(X_CXXFLAGS))
 CFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CFLAGS_INTERNAL)
 CXXFLAGS_INTERNAL := -c -I$(ZEPHYR_BASE)/include/posix -I$(PROJECT_BINARY_DIR)/include/generated $(CXXFLAGS_INTERNAL)
 
+# The XRCE client's multithread.h uses struct k_mutex on Zephyr without including
+# the kernel header. micro_ros_src is downloaded, so the include is forced here.
+ifneq ($(shell grep -s '^CONFIG_MICROROS_MULTITHREAD=y' $(PROJECT_BINARY_DIR)/.config),)
+CFLAGS_INTERNAL += -include zephyr/kernel.h
+CXXFLAGS_INTERNAL += -include zephyr/kernel.h
+endif
+
 .PHONY: all clean distclean get_package_names configure_colcon_meta configure_toolchain colcon_build
 
 all: $(BUILD_PATH)/libmicroros.a
@@ -65,7 +72,10 @@ configure_colcon_meta: $(COMPONENT_PATH)/colcon.meta $(UROS_DIR)/src
 	update_meta "microxrcedds_client" "UCLIENT_PROFILE_TCP=OFF"; \
 	update_meta "microxrcedds_client" "UCLIENT_PROFILE_CUSTOM_TRANSPORT=ON"; \
 	update_meta "microxrcedds_client" "UCLIENT_PROFILE_STREAM_FRAMING=ON"; \
-	update_meta "rmw_microxrcedds" "RMW_UXRCE_TRANSPORT=custom";
+	update_meta "rmw_microxrcedds" "RMW_UXRCE_TRANSPORT=custom"; \
+	if grep -q '^CONFIG_MICROROS_MULTITHREAD=y' $$ZEPHYR_CONF_FILE; then \
+		update_meta "microxrcedds_client" "UCLIENT_PROFILE_MULTITHREAD=ON"; \
+	fi
 
 
 # sysroot 指向 BUILD_PATH:模板里 find_library/find_path 是 ONLY 模式,只在 sysroot

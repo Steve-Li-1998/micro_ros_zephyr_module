@@ -77,6 +77,13 @@ if MICROROS
             default "Zephyr micro-ROS"
 
     endif
+    config MICROROS_MULTITHREAD
+        bool "Build the XRCE client with its multithread profile"
+        help
+            Locks the XRCE session, its streams and the rmw static input
+            buffers (UCLIENT_PROFILE_MULTITHREAD), for an application that
+            uses one session from several threads.
+
     config MICROROS_NODES
         string "available micro-ROS nodes"
         default "1"
