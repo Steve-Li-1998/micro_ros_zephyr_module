@@ -130,6 +130,12 @@ if(CONFIG_MICROROS_MULTITHREAD)
     zephyr_library_compile_options(-include zephyr/kernel.h)
 endif()
 
+# See microros_identity.c
+if(CONFIG_MICROROS_DOMAIN_ID GREATER -1 OR NOT CONFIG_MICROROS_CLIENT_KEY STREQUAL "0x0")
+    zephyr_library_sources(${MICROROS_DIR}/microros_identity/microros_identity.c)
+    zephyr_link_libraries(-Wl,--wrap=rmw_init_options_init)
+endif()
+
 add_dependencies(microros microros_transports)
 add_dependencies(microros_transports libmicroros_project)
 
