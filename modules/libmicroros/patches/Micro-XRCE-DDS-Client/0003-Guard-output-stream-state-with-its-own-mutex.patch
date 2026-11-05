@@ -1,4 +1,4 @@
-From ef682497b89dad03cffbd1ad78452a92a83ca27b Mon Sep 17 00:00:00 2001
+From 5c08157a2644c9256e11b3d8adde5208d115299f Mon Sep 17 00:00:00 2001
 From: Hao <hao3.li@tu-dortmund.de>
 Date: Thu, 5 Nov 2026 14:48:02 +0000
 Subject: [PATCH] Guard output stream state with its own mutex
@@ -26,12 +26,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
  .../session/stream/output_reliable_stream.h   |  1 +
  .../client/profile/multithread/multithread.h  | 18 ++++++++++
- src/c/core/session/session.c                  | 34 ++++++++++++++-----
+ src/c/core/session/session.c                  | 35 ++++++++++++++-----
  .../session/stream/output_reliable_stream.c   |  1 +
  src/c/core/session/stream/stream_storage.c    |  4 +--
- src/c/core/session/write_access.c             | 25 ++++++++++++--
+ src/c/core/session/write_access.c             | 25 +++++++++++--
  src/c/profile/multithread/multithread.c       | 14 ++++++++
- 7 files changed, 85 insertions(+), 12 deletions(-)
+ 7 files changed, 86 insertions(+), 12 deletions(-)
 
 diff --git a/include/uxr/client/core/session/stream/output_reliable_stream.h b/include/uxr/client/core/session/stream/output_reliable_stream.h
 index 342f40a..e932bde 100644
@@ -96,7 +96,7 @@ index 189b4a7..644f493 100644
  #define UXR_UNLOCK_ALL_INPUT_STREAMS(session)
  
 diff --git a/src/c/core/session/session.c b/src/c/core/session/session.c
-index 45900b1..5d93518 100644
+index 45900b1..d1fbf1b 100644
 --- a/src/c/core/session/session.c
 +++ b/src/c/core/session/session.c
 @@ -624,15 +624,28 @@ void uxr_flash_output_streams(
@@ -167,11 +167,12 @@ index 45900b1..5d93518 100644
      }
  }
  
-@@ -1218,7 +1231,12 @@ bool uxr_prepare_stream_to_write_submessage(
+@@ -1218,7 +1231,13 @@ bool uxr_prepare_stream_to_write_submessage(
          case UXR_RELIABLE_STREAM:
          {
              uxrOutputReliableStream* stream = uxr_get_output_reliable_stream(&session->streams, stream_id.index);
 -            available = stream && uxr_prepare_reliable_buffer_to_write(stream, submessage_size, ub);
++            available = false;
 +            if (stream)
 +            {
 +                UXR_LOCK_STREAM_STATE(stream);
