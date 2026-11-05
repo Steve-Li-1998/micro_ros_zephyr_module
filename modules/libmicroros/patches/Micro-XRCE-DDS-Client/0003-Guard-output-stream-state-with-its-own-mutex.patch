@@ -1,0 +1,318 @@
+From ef682497b89dad03cffbd1ad78452a92a83ca27b Mon Sep 17 00:00:00 2001
+From: Hao <hao3.li@tu-dortmund.de>
+Date: Thu, 5 Nov 2026 14:48:02 +0000
+Subject: [PATCH] Guard output stream state with its own mutex
+
+The output stream mutex did two jobs: keeping one message whole, which can
+span a wait for an ACKNACK, and guarding the stream's state. A fragmented
+publish held it while waiting for the session mutex, and readers held the
+session mutex while waiting for it, which deadlocked. ACKNACK handling could
+not take it for the same reason, so it took an input stream mutex and raced
+with the publish path.
+
+Add a state mutex as the innermost lock, held only for short sections that
+never wait for another lock. ACKNACK handling, heartbeats, writes and sends
+take it to access stream state, which removes the race.
+
+Flushing runs under the session mutex, so it now only tries the stream
+mutex. If another thread is writing a message, the flush skips the stream,
+and that writer flushes when it is ready. This also keeps a half written
+slot from being sent. The stream mutex stays held while waiting for an
+ACKNACK, so other publishers cannot break up a fragmented message.
+
+Refs eProsima/Micro-XRCE-DDS-Client#423
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../session/stream/output_reliable_stream.h   |  1 +
+ .../client/profile/multithread/multithread.h  | 18 ++++++++++
+ src/c/core/session/session.c                  | 34 ++++++++++++++-----
+ .../session/stream/output_reliable_stream.c   |  1 +
+ src/c/core/session/stream/stream_storage.c    |  4 +--
+ src/c/core/session/write_access.c             | 25 ++++++++++++--
+ src/c/profile/multithread/multithread.c       | 14 ++++++++
+ 7 files changed, 85 insertions(+), 12 deletions(-)
+
+diff --git a/include/uxr/client/core/session/stream/output_reliable_stream.h b/include/uxr/client/core/session/stream/output_reliable_stream.h
+index 342f40a..e932bde 100644
+--- a/include/uxr/client/core/session/stream/output_reliable_stream.h
++++ b/include/uxr/client/core/session/stream/output_reliable_stream.h
+@@ -52,6 +52,7 @@ typedef struct uxrOutputReliableStream
+ 
+ #ifdef UCLIENT_PROFILE_MULTITHREAD
+     uxrMutex mutex;
++    uxrMutex state_mutex;
+ #endif // ifdef UCLIENT_PROFILE_MULTITHREAD
+ 
+ } uxrOutputReliableStream;
+diff --git a/include/uxr/client/profile/multithread/multithread.h b/include/uxr/client/profile/multithread/multithread.h
+index 189b4a7..644f493 100644
+--- a/include/uxr/client/profile/multithread/multithread.h
++++ b/include/uxr/client/profile/multithread/multithread.h
+@@ -20,6 +20,8 @@ extern "C"
+ {
+ #endif // ifdef __cplusplus
+ 
++#include <stdbool.h>
++
+ #include <uxr/client/config.h>
+ #include <uxr/client/visibility.h>
+ #include <uxr/client/core/session/stream/stream_id.h>
+@@ -65,6 +67,9 @@ UXRDLLAPI void uxr_lock(
+ UXRDLLAPI void uxr_unlock(
+         uxrMutex* mutex);
+ 
++UXRDLLAPI bool uxr_try_lock(
++        uxrMutex* mutex);
++
+ // Conditional defines
+ 
+ #define UXR_INIT_LOCK(X) uxr_init_lock(X)
+@@ -92,6 +97,15 @@ UXRDLLAPI void uxr_unlock(
+         } \
+ }
+ 
++// A stream's state mutex guards its sequence numbers, slot sizes and heartbeat state, and is the
++// innermost lock: nothing waits for another lock or for an ACKNACK while holding it. The stream
++// mutex keeps one message whole, and can stay held while that message waits for an ACKNACK, so
++// nothing may wait for it while holding the session mutex. The lock order is stream mutex,
++// session mutex, input stream mutexes, state mutex.
++#define UXR_LOCK_STREAM_STATE(stream) uxr_lock(&(stream)->state_mutex)
++#define UXR_UNLOCK_STREAM_STATE(stream) uxr_unlock(&(stream)->state_mutex)
++#define UXR_TRY_LOCK(X) uxr_try_lock(X)
++
+ #define UXR_LOCK_ALL_INPUT_STREAMS(session) \
+     for (uint8_t i = 0; i < session->streams.input_best_effort_size; ++i){ \
+         uxr_lock(&session->streams.input_best_effort[i].mutex); } \
+@@ -124,6 +138,10 @@ UXRDLLAPI void uxr_unlock(
+ #define UXR_LOCK_STREAM_ID(session, stream_id)
+ #define UXR_UNLOCK_STREAM_ID(session, stream_id)
+ 
++#define UXR_LOCK_STREAM_STATE(stream)
++#define UXR_UNLOCK_STREAM_STATE(stream)
++#define UXR_TRY_LOCK(X) true
++
+ #define UXR_LOCK_ALL_INPUT_STREAMS(session)
+ #define UXR_UNLOCK_ALL_INPUT_STREAMS(session)
+ 
+diff --git a/src/c/core/session/session.c b/src/c/core/session/session.c
+index 45900b1..5d93518 100644
+--- a/src/c/core/session/session.c
++++ b/src/c/core/session/session.c
+@@ -624,15 +624,28 @@ void uxr_flash_output_streams(
+ 
+         uint8_t* buffer; size_t length; uxrSeqNum seq_num;
+ 
+-        UXR_LOCK_STREAM_ID(session, id);
++        // Every caller holds the session mutex, so this must not wait for the stream mutex. If it
++        // is taken, a message is being written, and its writer flushes when it is ready.
++        if (!UXR_TRY_LOCK(&stream->mutex))
++        {
++            continue;
++        }
+ 
+-        while (uxr_prepare_next_reliable_buffer_to_send(stream, &buffer, &length, &seq_num))
++        for (;;)
+         {
++            UXR_LOCK_STREAM_STATE(stream);
++            bool data_to_send = uxr_prepare_next_reliable_buffer_to_send(stream, &buffer, &length, &seq_num);
++            UXR_UNLOCK_STREAM_STATE(stream);
++
++            if (!data_to_send)
++            {
++                break;
++            }
+             uxr_stamp_session_header(&session->info, id.raw, seq_num, buffer);
+             send_message(session, buffer, length);
+         }
+ 
+-        UXR_UNLOCK_STREAM_ID(session, id);
++        UXR_UNLOCK(&stream->mutex);
+     }
+ }
+ 
+@@ -699,7 +712,7 @@ bool listen_message_reliably(
+             uxrOutputReliableStream* stream = &session->streams.output_reliable[i];
+             uxrStreamId id = uxr_stream_id(i, UXR_RELIABLE_STREAM, UXR_OUTPUT_STREAM);
+ 
+-            UXR_LOCK_STREAM_ID(session, id);
++            UXR_LOCK_STREAM_STATE(stream);
+             if (uxr_update_output_stream_heartbeat_timestamp(stream, timestamp))
+             {
+                 write_submessage_heartbeat(session, id);
+@@ -709,7 +722,7 @@ bool listen_message_reliably(
+             {
+                 next_heartbeat_timestamp = stream->next_heartbeat_timestamp;
+             }
+-            UXR_UNLOCK_STREAM_ID(session, id);
++            UXR_UNLOCK_STREAM_STATE(stream);
+         }
+ 
+         int32_t poll_to_next_heartbeat =
+@@ -1048,7 +1061,7 @@ void read_submessage_acknack(
+     uxrOutputReliableStream* stream = uxr_get_output_reliable_stream(&session->streams, id.index);
+     if (stream)
+     {
+-        UXR_LOCK_STREAM_ID(session, id);
++        UXR_LOCK_STREAM_STATE(stream);
+ 
+         uint16_t nack_bitmap = (uint16_t)(((uint16_t)acknack.nack_bitmap[0] << 8) + acknack.nack_bitmap[1]);
+         uxr_process_acknack(stream, nack_bitmap, acknack.first_unacked_seq_num);
+@@ -1060,7 +1073,7 @@ void read_submessage_acknack(
+             send_message(session, buffer, length);
+         }
+ 
+-        UXR_UNLOCK_STREAM_ID(session, id);
++        UXR_UNLOCK_STREAM_STATE(stream);
+     }
+ }
+ 
+@@ -1218,7 +1231,12 @@ bool uxr_prepare_stream_to_write_submessage(
+         case UXR_RELIABLE_STREAM:
+         {
+             uxrOutputReliableStream* stream = uxr_get_output_reliable_stream(&session->streams, stream_id.index);
+-            available = stream && uxr_prepare_reliable_buffer_to_write(stream, submessage_size, ub);
++            if (stream)
++            {
++                UXR_LOCK_STREAM_STATE(stream);
++                available = uxr_prepare_reliable_buffer_to_write(stream, submessage_size, ub);
++                UXR_UNLOCK_STREAM_STATE(stream);
++            }
+             break;
+         }
+         default:
+diff --git a/src/c/core/session/stream/output_reliable_stream.c b/src/c/core/session/stream/output_reliable_stream.c
+index f1772ec..7584534 100644
+--- a/src/c/core/session/stream/output_reliable_stream.c
++++ b/src/c/core/session/stream/output_reliable_stream.c
+@@ -30,6 +30,7 @@ void uxr_init_output_reliable_stream(
+     stream->offset = header_offset;
+ 
+     UXR_INIT_LOCK(&stream->mutex);
++    UXR_INIT_LOCK(&stream->state_mutex);
+ 
+     uxr_reset_output_reliable_stream(stream);
+ }
+diff --git a/src/c/core/session/stream/stream_storage.c b/src/c/core/session/stream/stream_storage.c
+index 1d9bcdc..8c5ba4b 100644
+--- a/src/c/core/session/stream/stream_storage.c
++++ b/src/c/core/session/stream/stream_storage.c
+@@ -142,9 +142,9 @@ bool uxr_output_streams_confirmed(
+     bool up_to_date = true;
+     for (unsigned i = 0; i < storage->output_reliable_size && up_to_date; ++i)
+     {
+-        UXR_LOCK((uxrMutex*) &storage->output_reliable[i].mutex);
++        UXR_LOCK((uxrMutex*) &storage->output_reliable[i].state_mutex);
+         up_to_date = uxr_is_output_up_to_date(&storage->output_reliable[i]);
+-        UXR_UNLOCK((uxrMutex*) &storage->output_reliable[i].mutex);
++        UXR_UNLOCK((uxrMutex*) &storage->output_reliable[i].state_mutex);
+     }
+     return up_to_date;
+ }
+diff --git a/src/c/core/session/write_access.c b/src/c/core/session/write_access.c
+index 35525c3..6ed7953 100644
+--- a/src/c/core/session/write_access.c
++++ b/src/c/core/session/write_access.c
+@@ -154,17 +154,28 @@ bool on_full_output_buffer_fragmented(
+ 
+     uxrOutputReliableStream* stream = uxr_get_output_reliable_stream(&session->streams, local_args->stream_id.index);
+ 
++    UXR_LOCK_STREAM_STATE(stream);
+     size_t remaining_blocks = get_available_free_slots(stream);
++    UXR_UNLOCK_STREAM_STATE(stream);
+ 
+     if (0 == remaining_blocks)
+     {
+-        if (!local_args->flush_callback(session, local_args->flush_callback_args) ||
+-                0 == (remaining_blocks = get_available_free_slots(stream)))
++        // The stream mutex stays held, to keep this message whole while it waits for an ACKNACK
++        if (!local_args->flush_callback(session, local_args->flush_callback_args))
++        {
++            return true;
++        }
++        UXR_LOCK_STREAM_STATE(stream);
++        remaining_blocks = get_available_free_slots(stream);
++        UXR_UNLOCK_STREAM_STATE(stream);
++        if (0 == remaining_blocks)
+         {
+             return true;
+         }
+     }
+ 
++    UXR_LOCK_STREAM_STATE(stream);
++
+     size_t buffer_capacity = uxr_get_reliable_buffer_capacity(&stream->base);
+     uint16_t available_block_size = (uint16_t)(buffer_capacity - (uint16_t)(stream->offset + SUBHEADER_SIZE));
+     local_args->data_size = local_args->data_size - (size_t) available_block_size;
+@@ -192,6 +203,8 @@ bool on_full_output_buffer_fragmented(
+ 
+     stream->last_written = uxr_seq_num_add(stream->last_written, 1);
+ 
++    UXR_UNLOCK_STREAM_STATE(stream);
++
+     // Preparing the buffer for the user
+     ucdr_init_buffer(
+         ub,
+@@ -224,7 +237,9 @@ uint16_t uxr_prepare_output_stream_fragmented(
+         return UXR_INVALID_REQUEST_ID;
+     }
+ 
++    UXR_LOCK_STREAM_STATE(stream);
+     size_t remaining_blocks = get_available_free_slots(stream);
++    UXR_UNLOCK_STREAM_STATE(stream);
+ 
+     if (0 == remaining_blocks)
+     {
+@@ -234,7 +249,9 @@ uint16_t uxr_prepare_output_stream_fragmented(
+             return UXR_INVALID_REQUEST_ID;
+         }
+         UXR_LOCK_STREAM_ID(session, stream_id);
++        UXR_LOCK_STREAM_STATE(stream);
+         remaining_blocks = get_available_free_slots(stream);
++        UXR_UNLOCK_STREAM_STATE(stream);
+         if (0 == remaining_blocks)
+         {
+             UXR_UNLOCK_STREAM_ID(session, stream_id);
+@@ -242,6 +259,8 @@ uint16_t uxr_prepare_output_stream_fragmented(
+         }
+     }
+ 
++    UXR_LOCK_STREAM_STATE(stream);
++
+     uxrSeqNum seq_num = stream->last_written;
+     uint8_t* buffer = uxr_get_reliable_buffer(&stream->base, seq_num);
+     size_t buffer_size = uxr_get_reliable_buffer_size(&stream->base, seq_num);
+@@ -277,6 +296,8 @@ uint16_t uxr_prepare_output_stream_fragmented(
+ 
+     stream->last_written = seq_num;
+ 
++    UXR_UNLOCK_STREAM_STATE(stream);
++
+     // Fill the SUBMESSAGE_ID_WRITE_DATA
+     size_t payload_size = WRITE_DATA_PAYLOAD_SIZE + data_size;
+ 
+diff --git a/src/c/profile/multithread/multithread.c b/src/c/profile/multithread/multithread.c
+index 1a8b1d1..de8ad66 100644
+--- a/src/c/profile/multithread/multithread.c
++++ b/src/c/profile/multithread/multithread.c
+@@ -52,6 +52,20 @@ void uxr_unlock(
+ #endif /* if defined(PLATFORM_NAME_FREERTOS) */
+ }
+ 
++bool uxr_try_lock(
++        uxrMutex* mutex)
++{
++#if defined(PLATFORM_NAME_FREERTOS)
++    return pdTRUE == xSemaphoreTakeRecursive(mutex->impl, 0);
++#elif defined(UCLIENT_PLATFORM_ZEPHYR)
++    return 0 == k_mutex_lock(&mutex->impl, K_NO_WAIT);
++#elif defined(UCLIENT_PLATFORM_POSIX)
++    return 0 == pthread_mutex_trylock(&mutex->impl);
++#else
++#error XRCE multithreading not supported for this platform.
++#endif /* if defined(PLATFORM_NAME_FREERTOS) */
++}
++
+ uxrMutex* uxr_get_stream_mutex_from_id(
+         struct uxrSession* session,
+         uxrStreamId stream_id)
