@@ -1,0 +1,38 @@
+From 2e0e5c5c55bd8364bcb0ba2bf1e9b361d5aea341 Mon Sep 17 00:00:00 2001
+From: Hao <hao3.li@tu-dortmund.de>
+Date: Wed, 4 Nov 2026 23:52:32 +0000
+Subject: [PATCH] Clean an acknowledged slot before releasing it
+
+uxr_process_acknack moved last_acknown first and cleaned the slot second,
+and nothing excludes the publish path, which holds a different lock. With
+a full history, a publish could write to that slot in between, and the
+cleanup then wiped the new sample while rcl_publish returned OK.
+
+Clean the slot first. A publish that reads the old last_acknown only sees
+less free space. This relies on write order, so a multi-core target would
+also need a memory barrier.
+
+Refs eProsima/Micro-XRCE-DDS-Client#423
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ src/c/core/session/stream/output_reliable_stream.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/src/c/core/session/stream/output_reliable_stream.c b/src/c/core/session/stream/output_reliable_stream.c
+index e7cde36..f1772ec 100644
+--- a/src/c/core/session/stream/output_reliable_stream.c
++++ b/src/c/core/session/stream/output_reliable_stream.c
+@@ -274,8 +274,10 @@ void uxr_process_acknack(
+     size_t buffers_to_clean = uxr_seq_num_sub(last_acked_seq_num, stream->last_acknown);
+     for (size_t i = 0; i < buffers_to_clean; i++)
+     {
+-        stream->last_acknown = uxr_seq_num_add(stream->last_acknown, 1);
+-        uxr_set_reliable_buffer_size(&stream->base, stream->last_acknown, stream->offset);
++        // Clean the slot first: once last_acknown moves, a publish can write to this slot
++        uxrSeqNum next_acknown = uxr_seq_num_add(stream->last_acknown, 1);
++        uxr_set_reliable_buffer_size(&stream->base, next_acknown, stream->offset);
++        stream->last_acknown = next_acknown;
+     }
+ 
+     stream->send_lost = (0 < bitmap);
