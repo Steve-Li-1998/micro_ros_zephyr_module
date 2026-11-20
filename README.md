@@ -19,7 +19,7 @@ west build -b esp32c6_devkitc <this directory> -d build-zenoh_relay_chain_relay
 
 The shell must not have ROS sourced: the build of libmicroros then finds the host's ROS packages and fails. Zephyr needs the patches of the superproject (`patches/README.md`).
 
-The Zenoh router is `tcp/192.168.50.164:8889`; `-DZENOH_ROUTER_IP=` and `-DZENOH_ROUTER_PORT=` change it. The Wi-Fi credentials are not in Git: inside the superproject they come from `ulf-uros.conf`, elsewhere pass a Kconfig fragment with `-DEXTRA_CONF_FILE=`.
+The Zenoh router is `tcp/192.168.50.164:8889`; `-DZENOH_ROUTER_IP=` and `-DZENOH_ROUTER_PORT=` change it. The Wi-Fi credentials are in `wifi.conf`, which is not in Git: copy `wifi.conf.example` and fill it in.
 
 ## Serial output
 
