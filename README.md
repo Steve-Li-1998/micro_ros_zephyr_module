@@ -1,60 +1,31 @@
-![banner](.images/banner-dark-theme.png#gh-dark-mode-only)
-![banner](.images/banner-light-theme.png#gh-light-mode-only)
+# relay_chain: application `monitor`
 
-# micro-ROS module for Zephyr
+One of the four micro-ROS applications of the relay_chain example (`source_a`, `source_b`, `relay`, `monitor`), on `rmw_zenoh_pico`. Subscribes to `/chain/a` and `/chain/relayed` and prints every sample. All topics are `std_msgs/msg/Int32`.
 
-This module has been tested in Zephyr RTOS v4.0.0 (SDK 0.16.9-rc3), and v4.1.0 (SDK 0.16.9-rc3), using a docker image based on `zephyrprojectrtos/zephyr-build:v0.26.17`.
+This directory is a checkout of `micro_ros_zephyr_module` (fork, branch `jazzy-esp32c6`, commit `728cd68`) with the application in `src/` and every Zephyr module it needs in `modules/`:
 
-## Dependencies
+| Module | From |
+|---|---|
+| `modules/libmicroros` | this repository |
+| `modules/zenoh-pico` | copy of the fork's branch `lf-uros`, commit `da31674a` |
+| `modules/rmw_zenoh_pico` | copy of the fork's branch `lf-uros`, commit `8e8de95` |
+| `modules/wifi_bootstrap` | copy from the superproject |
 
-This component needs `colcon` and other Python 3 packages in order to build micro-ROS packages:
-
-```bash
-pip3 install catkin_pkg lark-parser empy colcon-common-extensions
-```
-
-## Usage
-
-For example for `disco_l475_iot1` board:
-
-```bash
-west build -b disco_l475_iot1 -p
-```
-
-Some configuration parameters can be found using:
-
-```bash
-west build -t menuconfig
-# Modules -> micro-ROS support
-```
-
-Is possible to use a micro-ROS Agent just with this docker command:
-
-```bash
-# Serial micro-ROS Agent
-docker run -it --rm -v /dev:/dev --privileged --net=host microros/micro-ros-agent:jazzy serial --dev [YOUR BOARD PORT] -v6
-
-# UDPv4 micro-ROS Agent
-docker run -it --rm --net=host microros/micro-ros-agent:jazzy udp4 --port 8888 -v6
+## Build
 
 ```
+west build -b esp32c6_devkitc <this directory> -d build-zenoh_relay_chain_monitor
+```
 
-## Purpose of the Project
+The shell must not have ROS sourced: the build of libmicroros then finds the host's ROS packages and fails. Zephyr needs the patches of the superproject (`patches/README.md`).
 
-This software is not ready for production use. It has neither been developed nor
-tested for a specific use case. However, the license conditions of the
-applicable Open Source licenses allow you to adapt the software to your needs.
-Before using it in a safety relevant setting, make sure that the software
-fulfills your requirements and adjust it according to any applicable safety
-standards, e.g., ISO 26262.
+The Zenoh router is `tcp/192.168.50.164:8889`; `-DZENOH_ROUTER_IP=` and `-DZENOH_ROUTER_PORT=` change it. The Wi-Fi credentials are not in Git: inside the superproject they come from `ulf-uros.conf`, elsewhere pass a Kconfig fragment with `-DEXTRA_CONF_FILE=`.
 
-## License
+## Serial output
 
-This repository is open-sourced under the Apache-2.0 license. See the [LICENSE](LICENSE) file for details.
+```
+PUB,<record>,<time_us>,<A|B|R>,<value>    before a publish
+SUB,<record>,<time_us>,<A|B|R>,<value>    at the start of a subscription callback
+```
 
-For a list of other open-source components included in ROS 2 system_modes,
-see the file [3rd-party-licenses.txt](3rd-party-licenses.txt).
-
-## Known Issues/Limitations
-
-There are no known limitations.
+`<time_us>` is the board's own time since boot. Lines that start with `#` are status.

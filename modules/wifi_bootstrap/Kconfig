@@ -1,0 +1,27 @@
+config WIFI_BOOTSTRAP
+	bool "Blocking WiFi STA + DHCP bootstrap"
+	depends on WIFI && NET_MGMT
+	select NET_MGMT_EVENT
+	help
+	  提供 wifi_bootstrap_connect():以 STA 模式连接指定 AP,
+	  阻塞到 DHCP 拿到 IPv4 才返回。与具体协议栈无关,
+	  micro-ROS 和 reactor-uc(ulfc)的 app 均可使用。
+
+if WIFI_BOOTSTRAP
+
+config WIFI_BOOTSTRAP_SSID
+	string "WiFi SSID"
+	default "myssid"
+
+config WIFI_BOOTSTRAP_PASSWORD
+	string "WiFi password (WPA2-PSK)"
+	default "mypassword"
+
+config WIFI_BOOTSTRAP_AUTO_CONNECT
+	bool "Connect automatically at boot (SYS_INIT)"
+	help
+	  在 APPLICATION 级 SYS_INIT 里阻塞联网,main() 开始前网络已就绪。
+	  适合无法改动生成代码入口的场景(如 ulfc 生成的联邦节点);
+	  需要先画 UI 再联网的 app 请保持关闭,自行调用 wifi_bootstrap_connect()。
+
+endif
