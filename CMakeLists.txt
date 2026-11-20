@@ -11,12 +11,12 @@ list(APPEND ZEPHYR_EXTRA_MODULES
   ${CMAKE_CURRENT_SOURCE_DIR}/modules/zenoh-pico
   ${CMAKE_CURRENT_SOURCE_DIR}/modules/rmw_zenoh_pico)
 
-# Wi-Fi credentials are not in Git. Inside the superproject they are the
-# CONFIG_WIFI_BOOTSTRAP_* lines of its ulf-uros.conf; elsewhere, pass them
-# with -DEXTRA_CONF_FILE=<file>.
-include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/ulf_uros_conf.cmake OPTIONAL)
-if(COMMAND ulf_uros_extra_conf)
-  ulf_uros_extra_conf(CONFIG_WIFI_BOOTSTRAP_)
+# Wi-Fi credentials: wifi.conf, a Kconfig fragment with the
+# CONFIG_WIFI_BOOTSTRAP_* options. It is not in Git; wifi.conf.example is.
+if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/wifi.conf)
+  list(APPEND EXTRA_CONF_FILE ${CMAKE_CURRENT_SOURCE_DIR}/wifi.conf)
+else()
+  message(WARNING "wifi.conf is missing: copy wifi.conf.example and fill it in")
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
