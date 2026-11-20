@@ -1,24 +1,33 @@
 # SPDX-License-Identifier: Apache-2.0
+#
+# relay_chain example, application "source_b": a micro-ROS application on
+# rmw_zenoh_pico. Everything it builds lies in this directory.
 
-cmake_minimum_required(VERSION 3.13.1)
+cmake_minimum_required(VERSION 3.20.0)
 
-list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/modules/libmicroros)
-list(APPEND BOARD_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../boards/atk-dnesp32s3m-devboard)
+list(APPEND ZEPHYR_EXTRA_MODULES
+  ${CMAKE_CURRENT_SOURCE_DIR}/modules/libmicroros
+  ${CMAKE_CURRENT_SOURCE_DIR}/modules/wifi_bootstrap
+  ${CMAKE_CURRENT_SOURCE_DIR}/modules/zenoh-pico
+  ${CMAKE_CURRENT_SOURCE_DIR}/modules/rmw_zenoh_pico)
 
-# WiFi bootstrap 是超仓库里的共享 Zephyr module(micro-ROS 与 lfc-uc 共用)
-if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../../modules/wifi_bootstrap)
-    list(APPEND ZEPHYR_EXTRA_MODULES ${CMAKE_CURRENT_SOURCE_DIR}/../../modules/wifi_bootstrap)
-endif()
-
-# WiFi/agent 凭证等 CONFIG_* 直接取自超仓库根目录 ulf-uros.conf(单一来源,已
-# gitignore),经共享宏按前缀提取到构建目录再叠加,同名配置覆盖 prj.conf 的占位值
-# (OPTIONAL + COMMAND 判断:本模块单独 checkout 时无超仓库,退回 Kconfig 默认值)
+# Wi-Fi credentials are not in Git. Inside the superproject they are the
+# CONFIG_WIFI_BOOTSTRAP_* lines of its ulf-uros.conf; elsewhere, pass them
+# with -DEXTRA_CONF_FILE=<file>.
 include(${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/ulf_uros_conf.cmake OPTIONAL)
 if(COMMAND ulf_uros_extra_conf)
-    ulf_uros_extra_conf(CONFIG_WIFI_BOOTSTRAP_ CONFIG_MICROROS_)
+  ulf_uros_extra_conf(CONFIG_WIFI_BOOTSTRAP_)
 endif()
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(microros_sample_app)
+project(zenoh_relay_chain_source_b)
 
-target_sources(app PRIVATE src/main.c)
+set(ZENOH_ROUTER_IP "192.168.50.164" CACHE STRING "Address of the Zenoh router")
+set(ZENOH_ROUTER_PORT "8889" CACHE STRING "TCP port of the Zenoh router")
+message(STATUS "Zenoh router: tcp/${ZENOH_ROUTER_IP}:${ZENOH_ROUTER_PORT}")
+target_compile_definitions(app PRIVATE
+  ZENOH_ROUTER_IP="${ZENOH_ROUTER_IP}"
+  ZENOH_ROUTER_PORT="${ZENOH_ROUTER_PORT}")
+
+target_sources(app PRIVATE src/main.c src/wifi_ps.c)
+target_link_libraries(app PRIVATE rmw_zenoh_pico microros)
