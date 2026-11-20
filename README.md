@@ -7,7 +7,7 @@ This directory is a checkout of `micro_ros_zephyr_module` (fork, branch `jazzy-e
 | Module | From |
 |---|---|
 | `modules/libmicroros` | this repository |
-| `modules/zenoh-pico` | copy of the fork's branch `lf-uros`, commit `da31674a` |
+| `modules/zenoh-pico` | copy of the fork's branch `lf-uros`, commit `b6528f20` |
 | `modules/rmw_zenoh_pico` | copy of the fork's branch `lf-uros`, commit `8e8de95` |
 | `modules/wifi_bootstrap` | copy from the superproject |
 
