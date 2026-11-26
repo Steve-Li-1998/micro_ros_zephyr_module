@@ -3,3 +3,19 @@
 &wifi {
 	status = "okay";
 };
+
+/* Event source "tof": a VL53L0X on I2C0, which the board has on
+ * GPIO6 (SDA) and GPIO7 (SCL). */
+&i2c0 {
+	vl53l0x: vl53l0x@29 {
+		compatible = "st,vl53l0x";
+		reg = <0x29>;
+	};
+};
+
+/* Event source "gpio": a pulse to high on GPIO10 is one arrival. */
+/ {
+	zephyr,user {
+		event-gpios = <&gpio0 10 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+	};
+};
