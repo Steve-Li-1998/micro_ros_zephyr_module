@@ -1,10 +1,23 @@
 /*
- * relay_chain example, application "source_a".
+ * direction example, application "sensor_b".
  *
- * One timer of 500 ms publishes a counter on /chain/a.
+ * One of two sensors that an object passes one after the other. Each time the
+ * object arrives at this sensor, the application publishes the number of the
+ * arrival on /direction/b. The application "judge" takes the direction of the
+ * movement from the order of the two sensors' messages.
  *
- * Serial output, one record per publish, time stamp taken before the publish:
- *   PUB,<record>,<time_us>,A,<value>
+ * The arrivals come from an event source, which a thread of its own waits on
+ * (event_source.h): a VL53L0X distance sensor that the thread polls, or a
+ * pulse on a pin that raises an interrupt. The thread publishes as soon as
+ * the source reports an arrival, so the publish is not in a callback of the
+ * executor. The executor has one timer, which prints how many arrivals there
+ * have been.
+ *
+ * Serial output:
+ *   EVT,<record>,<time_us>,B,<count>,<detail>    before a publish
+ *   #STAT,<time_us>,events=<count>                 once a second
+ * <time_us> of EVT is the time of the arrival as the event source gives it;
+ * <detail> is the distance in mm for the VL53L0X and 0 for the pin.
  */
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -18,11 +31,12 @@
 
 #include <wifi_bootstrap.h>
 
-#define CHAIN_TOPIC  "/chain/a"
-#define CHAIN_LETTER 'A'
-#define NODE_NAME    "source_a"
+#include "event_source.h"
 
-#define PERIOD_MS 500
+#define SIDE           'B'
+#define TOPIC          "/direction/b"
+#define NODE           "direction_sensor_b"
+#define STAT_PERIOD_MS 1000
 
 #define RCCHECK(fn) { \
 	rcl_ret_t rc_ = fn; \
@@ -35,28 +49,52 @@
 static rcl_publisher_t publisher;
 static std_msgs__msg__Int32 msg;
 static uint32_t record;
+static atomic_t events;
+
+K_THREAD_STACK_DEFINE(event_stack, 4096);
+static struct k_thread event_thread;
 
 static inline uint64_t now_us(void)
 {
 	return k_cyc_to_us_floor64(k_cycle_get_64());
 }
 
-static void timer_cb(rcl_timer_t *timer, int64_t last_call_time)
+/* Waits for arrivals and publishes each one. Runs for as long as the board does. */
+static void event_main(void *p1, void *p2, void *p3)
+{
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	for (;;) {
+		struct event event;
+
+		if (event_source_wait(&event) != 0) {
+			printk("#ERR,event_source_wait\n");
+			k_msleep(1000);
+			continue;
+		}
+		msg.data = (int32_t)atomic_inc(&events);
+		printk("EVT,%u,%llu,%c,%d,%d\n", record++, event.time_us, SIDE, (int)msg.data,
+		       (int)event.detail);
+		if (rcl_publish(&publisher, &msg, NULL) != RCL_RET_OK) {
+			printk("#PUBFAIL,%c,%d\n", SIDE, (int)msg.data);
+			rcl_reset_error();
+		}
+	}
+}
+
+static void stat_cb(rcl_timer_t *timer, int64_t last_call_time)
 {
 	ARG_UNUSED(timer);
 	ARG_UNUSED(last_call_time);
 
-	printk("PUB,%u,%llu,%c,%d\n", record++, now_us(), CHAIN_LETTER, (int)msg.data);
-	if (rcl_publish(&publisher, &msg, NULL) != RCL_RET_OK) {
-		printk("#PUBFAIL,%c,%d\n", CHAIN_LETTER, (int)msg.data);
-		rcl_reset_error();
-	}
-	msg.data++;
+	printk("#STAT,%llu,events=%d\n", now_us(), (int)atomic_get(&events));
 }
 
 int main(void)
 {
-	printk("\n#BOOT,%s,period_ms=%d,topic=%s\n", NODE_NAME, PERIOD_MS, CHAIN_TOPIC);
+	printk("\n#BOOT," NODE ",topic=" TOPIC ",source=%s\n", event_source_name());
 
 	wifi_bootstrap_connect();
 
@@ -71,13 +109,21 @@ int main(void)
 	rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
 
 	RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
-	RCCHECK(rclc_node_init_default(&node, NODE_NAME, "", &support));
+	RCCHECK(rclc_node_init_default(&node, NODE, "", &support));
 	RCCHECK(rclc_publisher_init_default(&publisher, &node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), CHAIN_TOPIC));
-	RCCHECK(rclc_timer_init_default2(&timer, &support, RCL_MS_TO_NS(PERIOD_MS), timer_cb,
+		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), TOPIC));
+	RCCHECK(rclc_timer_init_default2(&timer, &support, RCL_MS_TO_NS(STAT_PERIOD_MS), stat_cb,
 					 true));
 	RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 	RCCHECK(rclc_executor_add_timer(&executor, &timer));
+
+	if (event_source_init() != 0) {
+		printk("#ERR,event_source_init,source=%s\n", event_source_name());
+		for (;;) { k_sleep(K_FOREVER); }
+	}
+	k_thread_create(&event_thread, event_stack, K_THREAD_STACK_SIZEOF(event_stack),
+			event_main, NULL, NULL, NULL, K_PRIO_PREEMPT(2), 0, K_NO_WAIT);
+	k_thread_name_set(&event_thread, "event");
 
 	printk("#RUN\n");
 	/* Returns only on an error other than a wait timeout */
