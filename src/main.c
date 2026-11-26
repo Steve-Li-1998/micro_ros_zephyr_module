@@ -1,14 +1,22 @@
 /*
- * relay_chain example, application "monitor".
+ * direction example, application "judge".
  *
- * Subscribes to /chain/a, published by source_a, and to /chain/relayed,
- * published by relay in answer to every sample of /chain/a and /chain/b. A
- * sample of /chain/a therefore reaches this application twice: directly, and
- * as the relayed value 2 * value. The order of the two is what the example
- * shows.
+ * Two sensors, which an object passes one after the other, each publish the
+ * number of every arrival: sensor_a on /direction/a, sensor_b on
+ * /direction/b. This application takes the direction of the movement from
+ * the order in which the two messages of one pass get here: the sensor whose
+ * message comes first is the one the object passed first.
+ *
+ * A message waits for one of the other sensor. If that comes within
+ * PASS_WINDOW_MS, the two are one pass and its direction is printed. If
+ * another message of the same sensor comes first, or none in time, the
+ * waiting one is given up as a pass that only one sensor saw.
  *
  * Serial output, time stamp taken at the start of the callback:
- *   SUB,<record>,<time_us>,<A|R>,<value>
+ *   SUB,<record>,<time_us>,<A|B>,<count>
+ *   DIR,<pass>,<AB|BA>,<gap_us>,<count_a>,<count_b>    a pass, first sensor first
+ *   LONE,<A|B>,<count>                                 an arrival without the other
+ * <gap_us> is the time between the two callbacks of the pass.
  */
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
@@ -22,6 +30,8 @@
 
 #include <wifi_bootstrap.h>
 
+#define PASS_WINDOW_MS 1000
+
 #define RCCHECK(fn) { \
 	rcl_ret_t rc_ = fn; \
 	if (rc_ != RCL_RET_OK) { \
@@ -30,30 +40,63 @@
 	} \
 }
 
-static rcl_subscription_t sub_a, sub_relayed;
-static std_msgs__msg__Int32 msg_a, msg_relayed;
+static rcl_subscription_t subscription_a, subscription_b;
+static std_msgs__msg__Int32 msg_a, msg_b;
 static uint32_t record;
+static uint32_t pass;
+
+/* The arrival that waits for the other sensor: 0 for none, else 'A' or 'B'. */
+static char waiting;
+static uint64_t waiting_since_us;
+static int32_t waiting_count;
 
 static inline uint64_t now_us(void)
 {
 	return k_cyc_to_us_floor64(k_cycle_get_64());
 }
 
-/* Both subscriptions share one callback; the message pointer tells them apart */
-static void sub_cb(const void *msgin)
+static void arrival(char sensor, int32_t count)
 {
 	uint64_t t = now_us();
 
-	if (msgin == &msg_a) {
-		printk("SUB,%u,%llu,A,%d\n", record++, t, (int)msg_a.data);
-	} else {
-		printk("SUB,%u,%llu,R,%d\n", record++, t, (int)msg_relayed.data);
+	printk("SUB,%u,%llu,%c,%d\n", record++, t, sensor, (int)count);
+
+	if (waiting != 0 && t - waiting_since_us > PASS_WINDOW_MS * 1000ULL) {
+		printk("LONE,%c,%d\n", waiting, (int)waiting_count);
+		waiting = 0;
 	}
+	if (waiting != 0 && waiting != sensor) {
+		int32_t count_a = sensor == 'A' ? count : waiting_count;
+		int32_t count_b = sensor == 'B' ? count : waiting_count;
+
+		printk("DIR,%u,%c%c,%llu,%d,%d\n", pass++, waiting, sensor,
+		       t - waiting_since_us, (int)count_a, (int)count_b);
+		waiting = 0;
+		return;
+	}
+	if (waiting == sensor) {
+		printk("LONE,%c,%d\n", waiting, (int)waiting_count);
+	}
+	waiting = sensor;
+	waiting_since_us = t;
+	waiting_count = count;
+}
+
+static void sub_a_cb(const void *msgin)
+{
+	ARG_UNUSED(msgin);
+	arrival('A', msg_a.data);
+}
+
+static void sub_b_cb(const void *msgin)
+{
+	ARG_UNUSED(msgin);
+	arrival('B', msg_b.data);
 }
 
 int main(void)
 {
-	printk("\n#BOOT,monitor\n");
+	printk("\n#BOOT,direction_judge,window_ms=%d\n", PASS_WINDOW_MS);
 
 	wifi_bootstrap_connect();
 
@@ -67,14 +110,15 @@ int main(void)
 	rclc_executor_t executor = rclc_executor_get_zero_initialized_executor();
 
 	RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
-	RCCHECK(rclc_node_init_default(&node, "monitor", "", &support));
-	RCCHECK(rclc_subscription_init_default(&sub_a, &node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "/chain/a"));
-	RCCHECK(rclc_subscription_init_default(&sub_relayed, &node,
-		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "/chain/relayed"));
+	RCCHECK(rclc_node_init_default(&node, "direction_judge", "", &support));
+	RCCHECK(rclc_subscription_init_default(&subscription_a, &node,
+		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "/direction/a"));
+	RCCHECK(rclc_subscription_init_default(&subscription_b, &node,
+		ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32), "/direction/b"));
 	RCCHECK(rclc_executor_init(&executor, &support.context, 2, &allocator));
-	RCCHECK(rclc_executor_add_subscription(&executor, &sub_a, &msg_a, &sub_cb, ON_NEW_DATA));
-	RCCHECK(rclc_executor_add_subscription(&executor, &sub_relayed, &msg_relayed, &sub_cb,
+	RCCHECK(rclc_executor_add_subscription(&executor, &subscription_a, &msg_a, &sub_a_cb,
+					       ON_NEW_DATA));
+	RCCHECK(rclc_executor_add_subscription(&executor, &subscription_b, &msg_b, &sub_b_cb,
 					       ON_NEW_DATA));
 
 	printk("#RUN\n");
